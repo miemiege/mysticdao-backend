@@ -188,6 +188,7 @@ export async function initDatabase(): Promise<Awaited<ReturnType<typeof open>>> 
     )
   `);
   await db.run(`CREATE INDEX IF NOT EXISTS idx_fengshui_user_created ON fengshui_readings(user_id, created_at)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_fengshui_birth_gender ON fengshui_readings(birth_year, gender)`);
 
   // ── 9. Reading History ──
   // 全类型排盘/分析历史记录
@@ -245,6 +246,72 @@ export async function initDatabase(): Promise<Awaited<ReturnType<typeof open>>> 
   await db.run(`ALTER TABLE subscribers ADD COLUMN birth_city TEXT`).catch(() => {});
   await db.run(`ALTER TABLE subscribers ADD COLUMN birth_minute INTEGER DEFAULT 0`).catch(() => {});
 
+  // ── 12. Error Logs ──
+  // 持久化 API 错误，用于排查线上问题
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS error_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint TEXT,
+      method TEXT,
+      status_code INTEGER,
+      error_message TEXT,
+      request_body TEXT,
+      stack_trace TEXT,
+      user_id TEXT,
+      ip_hash TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_error_logs_endpoint ON error_logs(endpoint, created_at)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_error_logs_created_at ON error_logs(created_at)`);
+
+  // ── 13. DB Version / Migration Tracking ──
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS db_version (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      version INTEGER NOT NULL DEFAULT 1,
+      applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      notes TEXT
+    )
+  `);
+  await db.run(`INSERT OR IGNORE INTO db_version (id, version, notes) VALUES (1, 1, 'initial schema')`);
+
+  // ── Schema migrations ──
+  const versionRow = await db.get<{ version: number }>('SELECT version FROM db_version WHERE id = 1');
+  const currentVersion = versionRow?.version || 1;
+
+  if (currentVersion < 2) {
+    // v1 → v2: add fengshui_birth_gender index, error_logs table, db_version
+    await db.run(`CREATE INDEX IF NOT EXISTS idx_fengshui_birth_gender ON fengshui_readings(birth_year, gender)`);
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS error_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        endpoint TEXT,
+        method TEXT,
+        status_code INTEGER,
+        error_message TEXT,
+        request_body TEXT,
+        stack_trace TEXT,
+        user_id TEXT,
+        ip_hash TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await db.run(`CREATE INDEX IF NOT EXISTS idx_error_logs_endpoint ON error_logs(endpoint, created_at)`);
+    await db.run(`CREATE INDEX IF NOT EXISTS idx_error_logs_created_at ON error_logs(created_at)`);
+    await db.run(`UPDATE db_version SET version = 2, notes = 'schema v2 with error_logs, fengshui index, db_version', applied_at = datetime('now') WHERE id = 1`);
+    console.log('📈 Schema migrated: v1 → v2');
+  }
+
+  // ── Run ANALYZE for query optimizer ──
+  await db.run('ANALYZE');
+
+  // ── Verify foreign keys are actually ON ──
+  const fkCheck = await db.get("PRAGMA foreign_keys");
+  if (fkCheck?.foreign_keys !== 1) {
+    console.warn('⚠️  WARNING: PRAGMA foreign_keys is not enforced. This may be a connection pool issue.');
+  }
+
   console.log(`📊 Database initialized: ${DB_PATH}`);
   return db;
 }
@@ -269,10 +336,83 @@ export async function purgeOldLogs(days: number = 90): Promise<number> {
   return result.changes || 0;
 }
 
+export async function purgeOldComplianceLogs(days: number = 365): Promise<number> {
+  const database = getDb();
+  const result = await database.run(
+    `DELETE FROM compliance_log WHERE created_at < datetime('now', '-${days} days')`
+  );
+  return result.changes || 0;
+}
+
+export async function purgeOldErrorLogs(days: number = 90): Promise<number> {
+  const database = getDb();
+  const result = await database.run(
+    `DELETE FROM error_logs WHERE created_at < datetime('now', '-${days} days')`
+  );
+  return result.changes || 0;
+}
+
 export async function logCompliance(eventType: string, ip: string, userId?: string, details?: string): Promise<void> {
   const database = getDb();
   await database.run(
     `INSERT INTO compliance_log (event_type, user_id, ip_hash, details) VALUES (?, ?, ?, ?)`,
     eventType, userId || null, hashIp(ip), details || null
   );
+}
+
+export async function logError(opts: {
+  endpoint?: string;
+  method?: string;
+  statusCode?: number;
+  errorMessage?: string;
+  requestBody?: string;
+  stackTrace?: string;
+  userId?: string;
+  ip?: string;
+}): Promise<void> {
+  const database = getDb();
+  try {
+    await database.run(
+      `INSERT INTO error_logs (endpoint, method, status_code, error_message, request_body, stack_trace, user_id, ip_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      opts.endpoint || null,
+      opts.method || null,
+      opts.statusCode || null,
+      opts.errorMessage || null,
+      opts.requestBody || null,
+      opts.stackTrace || null,
+      opts.userId || null,
+      opts.ip ? hashIp(opts.ip) : null
+    );
+  } catch (e) {
+    // Fail silently — never cascade failures
+    console.error('[logError] Failed to persist error:', e);
+  }
+}
+
+export async function vacuumDb(): Promise<void> {
+  const database = getDb();
+  await database.run('VACUUM');
+  console.log('🧹 Database VACUUM completed.');
+}
+
+export async function runAnalyze(): Promise<void> {
+  const database = getDb();
+  await database.run('ANALYZE');
+  console.log('📊 Database ANALYZE completed.');
+}
+
+export async function getDbStats(): Promise<Record<string, number>> {
+  const database = getDb();
+  const tables = [
+    'access_logs', 'api_usage', 'bazi_readings', 'compliance_log',
+    'content_cache', 'daily_stats', 'error_logs', 'feedback_ratings',
+    'fengshui_readings', 'reading_history', 'subscribers', 'user_favorites'
+  ];
+  const stats: Record<string, number> = {};
+  for (const table of tables) {
+    const row = await database.get(`SELECT COUNT(*) as cnt FROM ${table}`);
+    stats[table] = row?.cnt || 0;
+  }
+  return stats;
 }

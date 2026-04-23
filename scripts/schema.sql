@@ -1,8 +1,13 @@
--- MysticDAO Database Schema
--- SQLite3 — generated from mysticdao.db
+-- MysticDAO Database Schema v2
+-- SQLite3 — optimized with WAL, ANALYZE, and maintenance-ready
 -- Run: sqlite3 data/mysticdao.db < scripts/schema.sql
 
--- Access logs (GDPR compliant — IP hashed)
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+-- ═══════════════════════════════════════════════════════════════
+-- 1. Access Logs (GDPR compliant — IP hashed, 90-day retention)
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS access_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ip_hash TEXT NOT NULL,
@@ -19,7 +24,9 @@ CREATE TABLE IF NOT EXISTS access_logs (
 CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_access_logs_path ON access_logs(path);
 
--- API usage counters per endpoint
+-- ═══════════════════════════════════════════════════════════════
+-- 2. API Usage Statistics
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS api_usage (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   endpoint TEXT NOT NULL UNIQUE,
@@ -30,7 +37,9 @@ CREATE TABLE IF NOT EXISTS api_usage (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Subscribers (legacy, extended with birth info)
+-- ═══════════════════════════════════════════════════════════════
+-- 3. Subscribers (GDPR — explicit consent, unsubscribe)
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS subscribers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT,
@@ -57,7 +66,9 @@ CREATE TABLE IF NOT EXISTS subscribers (
 CREATE INDEX IF NOT EXISTS idx_subscribers_channel ON subscribers(channel);
 CREATE INDEX IF NOT EXISTS idx_subscribers_unsubscribed ON subscribers(unsubscribed);
 
--- Daily aggregated stats
+-- ═══════════════════════════════════════════════════════════════
+-- 4. Daily Aggregated Statistics
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS daily_stats (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   date TEXT NOT NULL UNIQUE,
@@ -70,7 +81,9 @@ CREATE TABLE IF NOT EXISTS daily_stats (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Compliance / audit log
+-- ═══════════════════════════════════════════════════════════════
+-- 5. Compliance / Audit Log (365-day retention)
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS compliance_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_type TEXT NOT NULL,
@@ -80,7 +93,9 @@ CREATE TABLE IF NOT EXISTS compliance_log (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Content cache
+-- ═══════════════════════════════════════════════════════════════
+-- 6. Content Cache
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS content_cache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   content_type TEXT NOT NULL,
@@ -95,7 +110,9 @@ CREATE TABLE IF NOT EXISTS content_cache (
   UNIQUE(content_type, language, date)
 );
 
--- Bazi (八字) readings
+-- ═══════════════════════════════════════════════════════════════
+-- 7. Bazi (八字) Readings
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS bazi_readings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT,
@@ -127,7 +144,9 @@ CREATE TABLE IF NOT EXISTS bazi_readings (
 CREATE INDEX IF NOT EXISTS idx_bazi_user_created ON bazi_readings(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bazi_birth ON bazi_readings(birth_year, birth_month, birth_day);
 
--- Feng Shui readings
+-- ═══════════════════════════════════════════════════════════════
+-- 8. Feng Shui Readings
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS fengshui_readings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT,
@@ -146,8 +165,11 @@ CREATE TABLE IF NOT EXISTS fengshui_readings (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_fengshui_user_created ON fengshui_readings(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_fengshui_birth_gender ON fengshui_readings(birth_year, gender);
 
--- General reading history
+-- ═══════════════════════════════════════════════════════════════
+-- 9. Reading History
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS reading_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT,
@@ -162,7 +184,9 @@ CREATE TABLE IF NOT EXISTS reading_history (
 CREATE INDEX IF NOT EXISTS idx_history_user_type ON reading_history(user_id, reading_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_history_session ON reading_history(session_id);
 
--- User favorites
+-- ═══════════════════════════════════════════════════════════════
+-- 10. User Favorites
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS user_favorites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
@@ -175,7 +199,9 @@ CREATE TABLE IF NOT EXISTS user_favorites (
 );
 CREATE INDEX IF NOT EXISTS idx_favorites_user ON user_favorites(user_id, created_at);
 
--- Feedback / ratings
+-- ═══════════════════════════════════════════════════════════════
+-- 11. Feedback / Ratings
+-- ═══════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS feedback_ratings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT,
@@ -187,3 +213,37 @@ CREATE TABLE IF NOT EXISTS feedback_ratings (
   source_ip_hash TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ═══════════════════════════════════════════════════════════════
+-- 12. Error Logs (90-day retention, for debugging)
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS error_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  endpoint TEXT,
+  method TEXT,
+  status_code INTEGER,
+  error_message TEXT,
+  request_body TEXT,
+  stack_trace TEXT,
+  user_id TEXT,
+  ip_hash TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_error_logs_endpoint ON error_logs(endpoint, created_at);
+CREATE INDEX IF NOT EXISTS idx_error_logs_created_at ON error_logs(created_at);
+
+-- ═══════════════════════════════════════════════════════════════
+-- 13. DB Version / Migration Tracking
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS db_version (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version INTEGER NOT NULL DEFAULT 1,
+  applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  notes TEXT
+);
+INSERT OR IGNORE INTO db_version (id, version, notes) VALUES (1, 2, 'schema v2 with error_logs, fengshui index, db_version');
+
+-- ═══════════════════════════════════════════════════════════════
+-- Optimization
+-- ═══════════════════════════════════════════════════════════════
+ANALYZE;

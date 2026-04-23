@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "tsx src/api/server.ts",
     "start": "tsx src/api/server.ts",
-    "db:init": "tsx scripts/init-db.ts"
+    "db:init": "tsx scripts/init-db.ts",
+    "db:backup": "cp data/mysticdao.db data/mysticdao.db.$(date +%Y%m%d_%H%M%S).bak && echo 'Backup created'",
+    "db:analyze": "sqlite3 data/mysticdao.db 'ANALYZE' && echo 'ANALYZE completed'",
+    "db:vacuum": "sqlite3 data/mysticdao.db 'VACUUM' && echo 'VACUUM completed'"
   },
   "dependencies": {
     "@types/sqlite3": "^3.1.11",

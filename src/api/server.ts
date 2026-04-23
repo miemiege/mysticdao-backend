@@ -14,7 +14,7 @@ import { getDailyEnergy, getDayPillar } from '../lib/divination/day-pillar.js';
 
 import { drawSpread, drawDailyCard, getCardOfTheDay } from '../lib/divination/tarot.js';
 import { getSystemPrompt } from '../prompts/ling-shu-system.js';
-import { initDatabase, getDb, hashIp, purgeOldLogs, logCompliance } from '../lib/db/database.js';
+import { initDatabase, getDb, hashIp, purgeOldLogs, purgeOldComplianceLogs, purgeOldErrorLogs, logCompliance, logError, getDbStats } from '../lib/db/database.js';
 import { saveBaziReading, getBaziReadingsByUser, deleteBaziReading } from '../lib/db/bazi-dao.js';
 import { saveFengshuiReading, getFengshuiReadingsByUser } from '../lib/db/fengshui-dao.js';
 import { saveHistory, getHistoryByUser, getHistoryBySession, addFavorite, removeFavorite, getFavoritesByUser, isFavorited } from '../lib/db/history-dao.js';
@@ -1599,11 +1599,21 @@ app.use((_req: Request, res: Response) => {
   res.status(404).json({ success: false, error: 'Endpoint not found' });
 });
 
-// FIX: 全局错误处理中间件 — 隐藏内部验证细节，返回友好错误
-app.use((err: any, _req: Request, res: Response, _next: any) => {
+// FIX: 全局错误处理中间件 — 隐藏内部验证细节，返回友好错误，同时持久化到 error_logs
+app.use((err: any, req: Request, res: Response, _next: any) => {
   if (err.name === 'ZodError' || err.issues) {
     return res.status(400).json({ success: false, error: 'Invalid input format. Please check your request data.' });
   }
+  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+  logError({
+    endpoint: req.path,
+    method: req.method,
+    statusCode: 500,
+    errorMessage: err.message || 'Internal server error',
+    stackTrace: err.stack || '',
+    requestBody: JSON.stringify(req.body).slice(0, 2000),
+    ip,
+  }).catch(() => {});
   console.error('[Server Error]', err);
   res.status(500).json({ success: false, error: 'Internal server error' });
 });
@@ -1627,6 +1637,10 @@ async function startServer() {
     console.warn('⚠️  WARNING: IP_SALT not set. Using default salt — production environments should set a strong random IP_SALT.');
   }
 
+  // Print database stats on startup
+  const stats = await getDbStats();
+  console.log('📊 Database stats:', stats);
+
   const server = app.listen(PORT, () => {
     console.log(`🌟 MysticDao API v2 — http://localhost:${PORT} | Mode: ${API_KEY ? '✅ AI' : '⚠️ LOCAL-ONLY'}`);
     console.log(`📊 Analytics: http://localhost:${PORT}/api/analytics/realtime`);
@@ -1634,6 +1648,35 @@ async function startServer() {
     console.log(`📧 Subscribe: POST http://localhost:${PORT}/api/subscribe`);
     console.log('');
   });
+
+  // ── Scheduled maintenance: auto-purge old logs every 24h ──
+  const MAINTENANCE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+  setInterval(async () => {
+    try {
+      const accessDeleted = await purgeOldLogs(90);
+      const complianceDeleted = await purgeOldComplianceLogs(365);
+      const errorDeleted = await purgeOldErrorLogs(90);
+      if (accessDeleted > 0 || complianceDeleted > 0 || errorDeleted > 0) {
+        console.log(`🧹 Maintenance: purged ${accessDeleted} access, ${complianceDeleted} compliance, ${errorDeleted} error logs`);
+      }
+    } catch (e) {
+      console.error('❌ Scheduled maintenance failed:', e);
+    }
+  }, MAINTENANCE_INTERVAL);
+
+  // Run maintenance once on startup (non-blocking)
+  setTimeout(async () => {
+    try {
+      const accessDeleted = await purgeOldLogs(90);
+      const complianceDeleted = await purgeOldComplianceLogs(365);
+      const errorDeleted = await purgeOldErrorLogs(90);
+      if (accessDeleted > 0 || complianceDeleted > 0 || errorDeleted > 0) {
+        console.log(`🧹 Startup maintenance: purged ${accessDeleted} access, ${complianceDeleted} compliance, ${errorDeleted} error logs`);
+      }
+    } catch (e) {
+      console.error('❌ Startup maintenance failed:', e);
+    }
+  }, 5000);
 
   // FIX: 优雅关闭，确保数据库连接正常关闭
   process.on('SIGTERM', () => {

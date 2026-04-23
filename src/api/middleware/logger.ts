@@ -8,7 +8,29 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { getDb, hashIp } from '../../lib/db/database.js';
+import { getDb, hashIp, logError } from '../../lib/db/database.js';
+
+// Rate limit: max access logs per IP per day (prevents log flooding)
+const MAX_LOGS_PER_IP_PER_DAY = 1000;
+const ipLogCounters = new Map<string, { count: number; date: string }>();
+
+function getToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function shouldLog(ipHash: string): boolean {
+  const today = getToday();
+  const entry = ipLogCounters.get(ipHash);
+  if (!entry || entry.date !== today) {
+    ipLogCounters.set(ipHash, { count: 1, date: today });
+    return true;
+  }
+  if (entry.count >= MAX_LOGS_PER_IP_PER_DAY) {
+    return false;
+  }
+  entry.count++;
+  return true;
+}
 
 // Sensitive query parameters that should never be logged
 const SENSITIVE_PARAMS = ['token', 'password', 'secret', 'api_key', 'auth', 'credential', 'key'];
@@ -48,6 +70,22 @@ export function accessLogger() {
         try {
           const db = getDb();
 
+          // 0. Rate limit access logs per IP per day
+          if (!shouldLog(ipHash)) {
+            // Still update API usage, but skip access_logs
+            await db.run(`
+              INSERT INTO api_usage (endpoint, call_count, error_count, total_response_time_ms, last_called_at)
+              VALUES (?, 1, ?, ?, datetime('now'))
+              ON CONFLICT(endpoint) DO UPDATE SET
+                call_count = call_count + 1,
+                error_count = error_count + ?,
+                total_response_time_ms = total_response_time_ms + ?,
+                last_called_at = datetime('now'),
+                updated_at = datetime('now')
+            `, path, status >= 400 ? 1 : 0, duration, status >= 400 ? 1 : 0, duration);
+            return;
+          }
+
           // 1. Log access
           await db.run(
             `INSERT INTO access_logs (ip_hash, method, path, query, user_agent, referer, status_code, response_time_ms)
@@ -66,6 +104,17 @@ export function accessLogger() {
               last_called_at = datetime('now'),
               updated_at = datetime('now')
           `, path, status >= 400 ? 1 : 0, duration, status >= 400 ? 1 : 0, duration);
+
+          // 3. Persist 5xx errors for debugging
+          if (status >= 500) {
+            await logError({
+              endpoint: path,
+              method,
+              statusCode: status,
+              errorMessage: `HTTP ${status} from ${path}`,
+              ip,
+            });
+          }
 
         } catch (e) {
           // Fail silently — never block request due to logging failure
