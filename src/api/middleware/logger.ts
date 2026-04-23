@@ -73,6 +73,7 @@ export function accessLogger() {
           // 0. Rate limit access logs per IP per day
           if (!shouldLog(ipHash)) {
             // Still update API usage, but skip access_logs
+            const isServerError = status >= 500;
             await db.run(`
               INSERT INTO api_usage (endpoint, call_count, error_count, total_response_time_ms, last_called_at)
               VALUES (?, 1, ?, ?, datetime('now'))
@@ -82,7 +83,7 @@ export function accessLogger() {
                 total_response_time_ms = total_response_time_ms + ?,
                 last_called_at = datetime('now'),
                 updated_at = datetime('now')
-            `, path, status >= 400 ? 1 : 0, duration, status >= 400 ? 1 : 0, duration);
+            `, path, isServerError ? 1 : 0, duration, isServerError ? 1 : 0, duration);
             return;
           }
 
@@ -94,6 +95,8 @@ export function accessLogger() {
           );
 
           // 2. Update API usage stats
+          // FIX: only count 5xx as server errors (4xx are user errors)
+          const isServerError = status >= 500;
           await db.run(`
             INSERT INTO api_usage (endpoint, call_count, error_count, total_response_time_ms, last_called_at)
             VALUES (?, 1, ?, ?, datetime('now'))
@@ -103,7 +106,7 @@ export function accessLogger() {
               total_response_time_ms = total_response_time_ms + ?,
               last_called_at = datetime('now'),
               updated_at = datetime('now')
-          `, path, status >= 400 ? 1 : 0, duration, status >= 400 ? 1 : 0, duration);
+          `, path, isServerError ? 1 : 0, duration, isServerError ? 1 : 0, duration);
 
           // 3. Persist 5xx errors for debugging
           if (status >= 500) {

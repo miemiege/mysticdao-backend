@@ -137,7 +137,7 @@ async function callAI(context: string, userMessage: string): Promise<string> {
     });
 
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('AI_TIMEOUT')), 8000); // 8秒超时
+      setTimeout(() => reject(new Error('AI_TIMEOUT')), 15000); // 15秒超时
     });
 
     const response = await Promise.race([aiPromise, timeoutPromise]);
@@ -1420,7 +1420,8 @@ app.post('/api/bazi', async (req: Request, res: Response) => {
     if (e.name === 'ZodError' || e.issues) {
       return res.status(400).json({ success: false, error: 'Invalid input format. Please check your request data.' });
     }
-    res.status(400).json({ success: false, error: e.message }); 
+    console.error('[/api/bazi] Server error:', e);
+    res.status(500).json({ success: false, error: 'Internal server error' }); 
   }
 });
 
@@ -1434,7 +1435,23 @@ app.post('/api/tarot', async (req: Request, res: Response) => {
     if (e.name === 'ZodError' || e.issues) {
       return res.status(400).json({ success: false, error: 'Invalid input format. Please check your request data.' });
     }
-    res.status(400).json({ success: false, error: e.message }); 
+    console.error('[/api/bazi] Server error:', e);
+    res.status(500).json({ success: false, error: 'Internal server error' }); 
+  }
+});
+
+app.post('/api/tarot', async (req: Request, res: Response) => {
+  try {
+    const d = z.object({ spreadType: z.enum(['single', 'three', 'celtic', 'relationship', 'decision', 'horseshoe']).default('three'), question: z.string().optional() }).parse(req.body);
+    const spread = drawSpread(d.spreadType, d.question);
+    const interp = await callAI('tarot', buildTarotMsg(spread.cards, spread.spreadName, d.question));
+    res.json({ success: true, data: { spread, interpretation: interp } });
+  } catch (e: any) { 
+    if (e.name === 'ZodError' || e.issues) {
+      return res.status(400).json({ success: false, error: 'Invalid input format. Please check your request data.' });
+    }
+    console.error('[/api/tarot] Server error:', e);
+    res.status(500).json({ success: false, error: 'Internal server error' }); 
   }
 });
 
@@ -1485,7 +1502,8 @@ app.post('/api/fengshui', async (req: Request, res: Response) => {
     if (e.name === 'ZodError' || e.issues) {
       return res.status(400).json({ success: false, error: 'Invalid input format. Please check your request data.' });
     }
-    res.status(400).json({ success: false, error: e.message }); 
+    console.error('[/api/fengshui] Server error:', e);
+    res.status(500).json({ success: false, error: 'Internal server error' }); 
   }
 });
 
